@@ -1,14 +1,17 @@
-# =============================================================
-#  批量ABC导出器 (Batch ABC Exporter)
-# -------------------------------------------------------------
-#  插件名称: 批量ABC导出器
-#  作者: toyvfish
-#  当前版本: v2.2
-#  最后更新时间: 2026-10-11
-#  适用软件: Autodesk Maya (PySide2 / PySide6)
-#  功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
-#            智能命名模板、自动版本号、同名防覆盖与设置记忆
-# =============================================================
+"""=============================================================
+ 批量ABC导出器 (Batch ABC Exporter)
+-------------------------------------------------------------
+ 插件名称: 批量ABC导出器
+ 作者: toyvfish
+ 当前版本: v2.2
+ 最后更新时间: 2026-10-11
+ 适用软件: Autodesk Maya (PySide2 / PySide6)
+ 功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
+           智能命名模板、自动版本号、同名防覆盖与设置记忆
+============================================================="""
+# 文件头信息必须保持为模块 docstring(三引号块),勿改回 # 注释:
+# 面板标题的版本号优先从 __doc__ 解析,在脚本编辑器粘贴执行等
+# 拿不到文件路径的场景下,只有 __doc__ 能随运行的源码被读到
 import maya.cmds as cmds
 import maya.mel as mel
 from maya import OpenMayaUI as omui
@@ -31,8 +34,11 @@ except ImportError:
     except ImportError:
         raise ImportError("需要PySide2或PySide6支持")
 
+_VERSION_LINE_RE = re.compile(r"^\s*#?\s*当前版本\s*[：:]\s*(\S+)", re.MULTILINE)
+
+
 def _get_header_candidate_paths():
-    """收集文件头注释可能所在的候选路径
+    """收集文件头信息可能所在的候选路径(docstring 读取失败时的兜底)
 
     import 导入时 __file__ 即脚本自身路径；在脚本编辑器直接执行文件内容
     等场景 __file__ 可能不存在，此时回退到 Maya 用户脚本目录中的同名脚本
@@ -50,11 +56,18 @@ def _get_header_candidate_paths():
 
 
 def _read_header_version(default="v2.2"):
-    """从脚本文件头注释中读取“当前版本”字段，读取失败时回退 default
+    """从文件头信息中读取“当前版本”字段，读取失败时回退 default
 
-    逐个尝试候选路径与编码，读到即返回；面板标题在每次创建窗口时
-    实时调用本函数，修改文件头注释中的版本号后重新打开窗口即可生效
+    优先解析模块 docstring(__doc__): 无论 import、脚本编辑器粘贴执行
+    还是 exec 加载，__doc__ 都随正在运行的源码一起存在，改版本号后
+    重新运行立即生效，且不依赖任何文件路径；
+    docstring 取不到时再逐个尝试候选路径与编码读取文件头
     """
+    doc = globals().get("__doc__")
+    if doc:
+        match = _VERSION_LINE_RE.search(doc)
+        if match:
+            return match.group(1)
     for path in _get_header_candidate_paths():
         for encoding in ("utf-8", "mbcs"):   # mbcs: Windows 本地编码兜底
             try:
@@ -63,7 +76,7 @@ def _read_header_version(default="v2.2"):
                         line = f.readline()
                         if not line:
                             break
-                        match = re.match(r"#\s*当前版本\s*[：:]\s*(\S+)", line)
+                        match = _VERSION_LINE_RE.match(line)
                         if match:
                             return match.group(1)
             except (UnicodeDecodeError, LookupError):
@@ -1345,7 +1358,7 @@ def create_dockable():
     
     control = cmds.workspaceControl(
         control_name,
-        label="ABC导出器",
+        label="ABC导出器 {0}".format(_read_header_version()),
         tabToControl=["AttributeEditor", -1],
         initialWidth=400
     )
