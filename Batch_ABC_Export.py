@@ -31,22 +31,45 @@ except ImportError:
     except ImportError:
         raise ImportError("需要PySide2或PySide6支持")
 
+def _get_header_candidate_paths():
+    """收集文件头注释可能所在的候选路径
+
+    import 导入时 __file__ 即脚本自身路径；在脚本编辑器直接执行文件内容
+    等场景 __file__ 可能不存在，此时回退到 Maya 用户脚本目录中的同名脚本
+    """
+    paths = []
+    script_path = globals().get("__file__")
+    if script_path:
+        paths.append(script_path)
+    try:
+        user_dir = cmds.internalVar(userScriptDir=True)
+        paths.append(os.path.join(user_dir, "Batch_ABC_Export.py"))
+    except Exception:
+        pass
+    return paths
+
+
 def _read_header_version(default="v2.2"):
     """从脚本文件头注释中读取“当前版本”字段，读取失败时回退 default
 
-    面板标题显示的版本号以文件头注释为准，升级脚本时只需修改注释一处
+    逐个尝试候选路径与编码，读到即返回；面板标题在每次创建窗口时
+    实时调用本函数，修改文件头注释中的版本号后重新打开窗口即可生效
     """
-    try:
-        with open(__file__, "r", encoding="utf-8") as f:
-            for _ in range(20):   # 只扫描文件开头若干行
-                line = f.readline()
-                if not line:
-                    break
-                match = re.match(r"#\s*当前版本\s*[：:]\s*(\S+)", line)
-                if match:
-                    return match.group(1)
-    except Exception:
-        pass
+    for path in _get_header_candidate_paths():
+        for encoding in ("utf-8", "mbcs"):   # mbcs: Windows 本地编码兜底
+            try:
+                with open(path, "r", encoding=encoding) as f:
+                    for _ in range(20):   # 只扫描文件开头若干行
+                        line = f.readline()
+                        if not line:
+                            break
+                        match = re.match(r"#\s*当前版本\s*[：:]\s*(\S+)", line)
+                        if match:
+                            return match.group(1)
+            except (UnicodeDecodeError, LookupError):
+                continue   # 编码不对，换下一种编码重试
+            except Exception:
+                break   # 文件读不了(不存在/无权限)，换下一个路径
     return default
 
 
@@ -380,7 +403,7 @@ class HelpDialog(QtWidgets.QDialog):
 class ABCExporterUI(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super(ABCExporterUI, self).__init__(parent)
-        self.setWindowTitle("{0} {1}".format(PLUGIN_NAME, PLUGIN_VERSION))
+        self.setWindowTitle("{0} {1}".format(PLUGIN_NAME, _read_header_version()))
         self.setMinimumWidth(280)
         self.setWindowFlags(QtCore.Qt.Window)  # 设置为独立窗口
         self.export_path = ""  # 存储导出路径
