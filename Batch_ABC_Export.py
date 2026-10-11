@@ -1,3 +1,14 @@
+# =============================================================
+#  批量ABC导出器 (Batch ABC Exporter)
+# -------------------------------------------------------------
+#  插件名称: 批量ABC导出器
+#  作者: toyvfish
+#  当前版本: v2.2
+#  最后更新时间: 2026-10-11
+#  适用软件: Autodesk Maya (PySide2 / PySide6)
+#  功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
+#            智能命名模板、自动版本号、同名防覆盖与设置记忆
+# =============================================================
 import maya.cmds as cmds
 import maya.mel as mel
 from maya import OpenMayaUI as omui
@@ -19,6 +30,29 @@ except ImportError:
         PYSIDE_VERSION = 2
     except ImportError:
         raise ImportError("需要PySide2或PySide6支持")
+
+def _read_header_version(default="v2.2"):
+    """从脚本文件头注释中读取“当前版本”字段，读取失败时回退 default
+
+    面板标题显示的版本号以文件头注释为准，升级脚本时只需修改注释一处
+    """
+    try:
+        with open(__file__, "r", encoding="utf-8") as f:
+            for _ in range(20):   # 只扫描文件开头若干行
+                line = f.readline()
+                if not line:
+                    break
+                match = re.match(r"#\s*当前版本\s*[：:]\s*(\S+)", line)
+                if match:
+                    return match.group(1)
+    except Exception:
+        pass
+    return default
+
+
+PLUGIN_NAME = "批量ABC导出器"
+PLUGIN_VERSION = _read_header_version()
+
 
 def get_maya_main_window():
     """获取Maya主窗口指针"""
@@ -346,7 +380,7 @@ class HelpDialog(QtWidgets.QDialog):
 class ABCExporterUI(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super(ABCExporterUI, self).__init__(parent)
-        self.setWindowTitle("批量ABC导出器 v2.2")
+        self.setWindowTitle("{0} {1}".format(PLUGIN_NAME, PLUGIN_VERSION))
         self.setMinimumWidth(280)
         self.setWindowFlags(QtCore.Qt.Window)  # 设置为独立窗口
         self.export_path = ""  # 存储导出路径
