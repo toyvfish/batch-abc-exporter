@@ -3,8 +3,8 @@
 -------------------------------------------------------------
  插件名称: 批量ABC导出器
  作者: toyvfish
- 当前版本: v2.2
- 最后更新时间: 2026-10-11
+ 当前版本: v2.3
+ 最后更新时间: 2026-10-15
  适用软件: Autodesk Maya (PySide2 / PySide6)
  功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
            智能命名模板、自动版本号、同名防覆盖与设置记忆
@@ -20,6 +20,8 @@ import os
 import sys
 import json
 import subprocess
+import builtins
+import time
 
 # Maya版本兼容性处理
 try:
@@ -55,7 +57,7 @@ def _get_header_candidate_paths():
     return paths
 
 
-def _read_header_version(default="v2.2"):
+def _read_header_version(default="v2.3"):
     """从文件头信息中读取“当前版本”字段，读取失败时回退 default
 
     优先解析模块 docstring(__doc__): 无论 import、脚本编辑器粘贴执行
@@ -106,10 +108,8 @@ AVAILABLE_VARIABLES = [
     ("{user}", "当前用户"),
     ("{date}", "当前日期"),
     ("{time}", "当前时间"),
-    ("{shot}", "镜头编号"),
     ("{start}", "起始帧"),
     ("{end}", "结束帧"),
-    ("{assetType}", "资产类型"),
     ("##", "自动版本号"),
 ]
 
@@ -204,56 +204,7 @@ def delete_settings_file():
     except Exception as e:
         return str(e)
 
-class ProgressDialog(QtWidgets.QDialog):
-    """带有ESC中断功能的进度对话框"""
-    def __init__(self, parent=None):
-        super(ProgressDialog, self).__init__(parent)
-        self.setWindowTitle("导出进度")
-        self.setModal(True)
-        self.setMinimumWidth(400)
-        self.cancelled = False
-        
-        layout = QtWidgets.QVBoxLayout()
-        
-        self.label = QtWidgets.QLabel("准备导出...")
-        layout.addWidget(self.label)
-        
-        self.progress = QtWidgets.QProgressBar()
-        self.progress.setMinimum(0)
-        self.progress.setMaximum(100)
-        layout.addWidget(self.progress)
-        
-        self.cancel_btn = QtWidgets.QPushButton("取消 (ESC)")
-        self.cancel_btn.clicked.connect(self.cancel)
-        layout.addWidget(self.cancel_btn)
-        
-        self.setLayout(layout)
-        
-    def keyPressEvent(self, event):
-        """处理ESC键按下事件"""
-        if event.key() == QtCore.Qt.Key_Escape:
-            self.cancel()
-        else:
-            super(ProgressDialog, self).keyPressEvent(event)
-    
-    def cancel(self):
-        """取消导出"""
-        self.cancelled = True
-        self.accept()
-    
-    def update_progress(self, current, total, current_obj=""):
-        """更新进度"""
-        if self.cancelled:
-            return False
-            
-        progress = int((current / total) * 100) if total > 0 else 0
-        self.progress.setValue(progress)
-        self.label.setText(f"正在导出: {current_obj} ({current}/{total})")
-        
-        # 处理Qt事件，确保界面响应
-        QtWidgets.QApplication.processEvents()
-        
-        return not self.cancelled
+
 
 class HelpDialog(QtWidgets.QDialog):
     """帮助对话框"""
@@ -302,8 +253,8 @@ class HelpDialog(QtWidgets.QDialog):
 <p><b>预设模板：</b></p>
 <p>• 物体名称：直接使用物体名</p>
 <p>• 角色动画：场景_物体_版本号</p>
-<p>• 场景缓存：资产类型_物体_cache</p>
-<p>• 镜头版本：镜头_物体_版本_用户</p>
+<p>• 场景缓存：场景_物体_cache</p>
+<p>• 镜头版本：场景_物体_版本_用户</p>
 <p>• 日期版本：物体_日期_版本</p>
 <p>• 时间范围：物体_起始帧-结束帧</p>
 <p>------------------------------------------------------------------
@@ -314,10 +265,8 @@ class HelpDialog(QtWidgets.QDialog):
 <p>• {user} - 当前用户</p>
 <p>• {date} - 当前日期 (YYYYMMDD)</p>
 <p>• {time} - 当前时间 (HHMMSS)</p>
-<p>• {shot} - 镜头编号</p>
 <p>• {start} - 起始帧</p>
 <p>• {end} - 结束帧</p>
-<p>• {assetType} - 资产类型</p>
 <p>• ## - 自动版本号（v001, v002...）</p>
 <p>------------------------------------------------------------------
 
@@ -361,6 +310,20 @@ class HelpDialog(QtWidgets.QDialog):
         # 更新日志内容
         changelog_content = """
 <h2>更新日志</h2>
+
+<h3>v2.3</h3>
+
+<p style="margin-top: 12px">• <b>[新增] 导出进度改为底部常驻进度条</b></p>
+<p style="margin-left: 14px">移除导出进度弹窗，主界面底部新增常驻的状态文本与细进度条，实时显示当前进度与正在处理的物体。</p>
+
+<p style="margin-top: 12px">• <b>[修复] ? 按钮右键菜单关闭后悬浮高亮残留</b></p>
+<p style="margin-left: 14px">右键菜单关闭后，? 按钮不再保持悬浮状态的背景高亮。</p>
+
+<p style="margin-top: 12px">• <b>[移除] {assetType} 资产类型与 {shot} 镜头编号变量</b></p>
+<p style="margin-left: 14px">两者此前始终输出固定占位值（character / SHOT001），已从可用变量中移除；「场景缓存」「镜头版本」预设模板改用 {scene} 场景名称。</p>
+
+<p style="margin-top: 12px">• <b>[移除] 导出进度窗口</b></p>
+<p style="margin-left: 14px">导出进度不再以窗口弹出，集成到插件面板中。</p>
 
 <h3>v2.2</h3>
 
@@ -420,6 +383,9 @@ class ABCExporterUI(QtWidgets.QWidget):
         self.setMinimumWidth(280)
         self.setWindowFlags(QtCore.Qt.Window)  # 设置为独立窗口
         self.export_path = ""  # 存储导出路径
+        self.exporting = False         # 是否正在导出(ESC 中断仅在此时生效)
+        self.export_cancelled = False  # ESC 触发的取消标志
+        self._export_busy = False       # 避免处理 Qt 事件时重复触发导出
         self.setup_ui()
 
     def setup_ui(self):
@@ -507,8 +473,8 @@ class ABCExporterUI(QtWidgets.QWidget):
         self.template_combo.addItems([
             "物体名称: {name}", 
             "角色动画: {scene}_{name}_##",
-            "场景缓存: {assetType}_{name}_cache",
-            "镜头版本: {shot}_{name}_##_{user}",
+            "场景缓存: {scene}_{name}_cache",
+            "镜头版本: {scene}_{name}_##_{user}",
             "日期版本: {name}_{date}_##",
             "时间范围: {name}_{start}-{end}",
             "自定义"
@@ -730,6 +696,27 @@ class ABCExporterUI(QtWidgets.QWidget):
         layout.addWidget(options_group)
         layout.addWidget(name_group)
         layout.addWidget(path_group)
+        # 进度区:常驻的文本标签 + 细进度条(导出时实时刷新,取代原弹窗)
+        self.progress_label = QtWidgets.QLabel("就绪")
+        layout.addWidget(self.progress_label)
+        self.progress_bar = QtWidgets.QProgressBar()
+        self.progress_bar.setRange(0, 1000)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setFixedHeight(4)
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                background-color: #646464;
+                border: none;
+                border-radius: 2px;
+            }
+            QProgressBar::chunk {
+                background-color: #56abdf;
+                border-radius: 2px;
+            }
+        """)
+        layout.addWidget(self.progress_bar)
+
         layout.addLayout(button_layout)
         self.setLayout(layout)
 
@@ -774,6 +761,61 @@ class ABCExporterUI(QtWidgets.QWidget):
         painter.end()
         return QtGui.QIcon(pix)
 
+    def set_progress(self, current, total, text):
+        """按实际已处理工作量更新进度，显示精度为 0.1%。"""
+        value = max(0, min(1000, int(current / total * 1000))) if total > 0 else 0
+        self.progress_bar.setValue(value)
+        self.progress_label.setText(f"{value / 10:.1f}%  {text}")
+        QtWidgets.QApplication.processEvents()
+
+    def run_export(self, job, file_name, start, end, completed, total, text):
+        """利用 Alembic 逐帧回调反馈进度，不拆分原有导出作业。"""
+        callback_name = "_batch_abc_export_progress_{:x}".format(id(self))
+        frame_count = max(1, end - start + 1)
+        frame_done = 0
+        last_update = 0.0
+
+        def on_frame():
+            nonlocal frame_done, last_update
+            if self.exporting and self.export_cancelled:
+                return
+            frame_done = min(frame_done + 1, frame_count)
+            value = min(999, int((completed + frame_done / frame_count) * 1000 / total))
+            if value <= self.progress_bar.value():
+                return
+            now = time.monotonic()
+            if now - last_update < 0.1:
+                return
+            last_update = now
+            self.set_progress(value, 1000, text)
+
+        setattr(builtins, callback_name, on_frame)
+        try:
+            callback = "__import__('builtins').{}()".format(callback_name)
+            job += f' -pythonPerFrameCallback \\"{callback}\\"'
+            job += f' -file \\"{file_name}\\" "'
+            mel.eval(job)
+        finally:
+            delattr(builtins, callback_name)
+
+    def keyPressEvent(self, event):
+        """导出过程中按 ESC 中断(取代原弹窗的取消按钮)"""
+        if event.key() == QtCore.Qt.Key_Escape and self.exporting:
+            self.export_cancelled = True
+            self.progress_label.setText("正在取消,等待当前物体完成...")
+            event.accept()
+            return
+        super(ABCExporterUI, self).keyPressEvent(event)
+
+    def closeEvent(self, event):
+        if self._export_busy:
+            event.ignore()
+            if self.exporting:
+                self.export_cancelled = True
+                self.progress_label.setText("正在取消,等待当前物体完成...")
+            return
+        super(ABCExporterUI, self).closeEvent(event)
+
     def show_defaults_menu(self, btn):
         """弹出默认设置右键菜单"""
         menu = QtWidgets.QMenu(self)
@@ -782,6 +824,15 @@ class ABCExporterUI(QtWidgets.QWidget):
         menu.addSeparator()
         menu.addAction("打开设置文件夹", self.open_settings_folder)
         menu.exec_(btn.mapToGlobal(QtCore.QPoint(0, btn.height())))
+        # 菜单以模态事件循环弹出:右键的释放事件会被菜单吞掉,按钮的
+        # "按下"标志卡住;关闭后按钮也收不到 Leave 事件,"悬浮"标志卡住,
+        # 两者都会让样式表的 :hover / :pressed 高亮残留。
+        # 菜单关闭后清除按下标志,并按鼠标真实位置决定是否清除悬浮标志,
+        # 鼠标确实还在按钮上时(如 ESC 关闭菜单)保留正常悬浮反馈
+        btn.setDown(False)
+        if not btn.rect().contains(btn.mapFromGlobal(QtGui.QCursor.pos())):
+            btn.setAttribute(QtCore.Qt.WA_UnderMouse, False)
+        btn.update()
 
     def save_as_default(self):
         """把当前全部参数写入存档,作为下次启动的默认设置"""
@@ -951,8 +1002,8 @@ class ABCExporterUI(QtWidgets.QWidget):
         templates = {
             0: "{name}",
             1: "{scene}_{name}_##",
-            2: "{assetType}_{name}_cache",
-            3: "{shot}_{name}_##_{user}",
+            2: "{scene}_{name}_cache",
+            3: "{scene}_{name}_##_{user}",
             4: "{name}_{date}_##", 
             5: "{name}_{start}-{end}",
             6: "",  # 自定义
@@ -1040,7 +1091,10 @@ class ABCExporterUI(QtWidgets.QWidget):
     def do_merge_export(self):
         """合并导出选中物体为一个ABC文件"""
         from datetime import datetime
-        
+
+        if self._export_busy:
+            return
+
         # 检查是否已选择导出路径
         if not self.export_path:
             QtWidgets.QMessageBox.warning(self, "警告", "请先选择或输入导出路径！")
@@ -1057,12 +1111,6 @@ class ABCExporterUI(QtWidgets.QWidget):
             cmds.warning("请先选择要导出的物体或组")
             return
 
-        # 创建进度对话框
-        progress_dialog = ProgressDialog(self)
-        progress_dialog.show()
-        
-        # 显示准备阶段
-        progress_dialog.update_progress(0, 100, "准备合并导出...")
         
         # 获取基础变量
         scene_path = cmds.file(q=True, sceneName=True) or "untitled"
@@ -1090,9 +1138,10 @@ class ABCExporterUI(QtWidgets.QWidget):
         if not file_path.endswith("/"):
             file_path += "/"
 
+        self._export_busy = True
         try:
             # 显示处理阶段
-            progress_dialog.update_progress(25, 100, "处理文件名...")
+            self.set_progress(0, 1, "处理文件名...")
             
             # 使用最后一个选中物体的名称作为文件名
             last_obj = selected[-1]
@@ -1106,10 +1155,8 @@ class ABCExporterUI(QtWidgets.QWidget):
                 'user': current_user,
                 'date': current_date,
                 'time': current_time,
-                'shot': 'SHOT001',  # 默认镜头编号，可根据需要修改
                 'start': start,
                 'end': end,
-                'assetType': 'character'  # 默认资产类型，可根据需要修改
             }
             
             # 格式化文件名
@@ -1120,7 +1167,7 @@ class ABCExporterUI(QtWidgets.QWidget):
                 base_name = obj_name  # 回退到物体名称
             
             # 显示版本检查阶段
-            progress_dialog.update_progress(50, 100, "检查版本号...")
+            self.set_progress(0, 1, "检查版本号...")
             
             # 处理版本号
             if "##" in base_name:
@@ -1144,7 +1191,6 @@ class ABCExporterUI(QtWidgets.QWidget):
             if self.avoid_overwrite_cb.isChecked():
                 dedup_name = self.resolve_duplicate_name(file_path, final_name)
                 if dedup_name is None:
-                    progress_dialog.close()
                     QtWidgets.QMessageBox.warning(self, "导出中止",
                         f"无法为 {final_name} 生成不重复的文件名（后缀已达上限），已取消导出")
                     return
@@ -1157,7 +1203,8 @@ class ABCExporterUI(QtWidgets.QWidget):
 
             # 显示导出阶段
             obj_names = [obj.split('|')[-1] for obj in selected]
-            progress_dialog.update_progress(75, 100, f"正在导出 {len(selected)} 个物体: {', '.join(obj_names[:3])}{'...' if len(obj_names) > 3 else ''}")
+            progress_text = f"正在合并导出 {len(selected)} 个物体: {', '.join(obj_names[:3])}{'...' if len(obj_names) > 3 else ''}"
+            self.set_progress(0, 1, progress_text)
 
             # 构建完整导出命令 - 合并导出所有选中物体
             cmd = f'AbcExport -j "-frameRange {start} {end}'
@@ -1166,32 +1213,33 @@ class ABCExporterUI(QtWidgets.QWidget):
                 cmd += f' -root {obj}'
             if export_options:
                 cmd += " " + " ".join(export_options)
-            cmd += f' -file \\"{file_name}\\" "'
-
-            # 执行导出
-            mel.eval(cmd)
+            # 执行导出，进度由 AbcExport 已导出帧驱动
+            self.run_export(cmd, file_name, start, end, 0, 1, progress_text)
             print(f"成功合并导出: {file_name}")
             
             # 显示完成阶段
-            progress_dialog.update_progress(100, 100, "导出完成")
+            self.set_progress(1, 1, "导出完成")
             
-            # 关闭进度对话框
-            progress_dialog.close()
             
             # 显示成功消息
             QtWidgets.QMessageBox.information(self, "导出结果", f"合并导出完成！\n文件: {final_name}.abc\n包含 {len(selected)} 个物体")
             
         except Exception as e:
-            progress_dialog.close()
+            self.progress_label.setText("合并导出失败,详见脚本编辑器错误日志")
             cmds.warning(f"合并导出失败: {str(e)}")
             import traceback
             traceback.print_exc()
             QtWidgets.QMessageBox.critical(self, "导出错误", f"合并导出失败:\n{str(e)}")
+        finally:
+            self._export_busy = False
 
     def do_export(self):
         """单独导出选中物体为一个ABC文件"""
         from datetime import datetime
-        
+
+        if self._export_busy:
+            return
+
         # 检查是否已选择导出路径
         if not self.export_path:
             QtWidgets.QMessageBox.warning(self, "警告", "请先选择或输入导出路径！")
@@ -1208,9 +1256,6 @@ class ABCExporterUI(QtWidgets.QWidget):
             cmds.warning("请先选择要导出的物体或组")
             return
     
-        # 创建进度对话框
-        progress_dialog = ProgressDialog(self)
-        progress_dialog.show()
         
         # 获取基础变量
         scene_path = cmds.file(q=True, sceneName=True) or "untitled"
@@ -1239,14 +1284,24 @@ class ABCExporterUI(QtWidgets.QWidget):
             file_path += "/"
     
         # 批量导出
+        # 进入导出流程,允许按 ESC 中断
+        self._export_busy = True
+        self.exporting = True
+        self.export_cancelled = False
         success_count = 0
+        processed_count = 0
         total_count = len(selected)
-        
+        self.set_progress(0, total_count, "准备单独导出...")
+
         for i, obj in enumerate(selected):
-            # 检查是否被取消
-            if not progress_dialog.update_progress(i, total_count, obj.split('|')[-1]):
+            # 检查是否被取消(导出中按 ESC,物体之间响应)
+            if self.export_cancelled:
                 break
-                
+            progress_text = f"正在导出: {obj.split('|')[-1]} ({i + 1}/{total_count})"
+            self.set_progress(i, total_count, progress_text)
+            if self.export_cancelled:
+                break
+
             try:
                 # 生成合法文件名
                 raw_name = obj.split('|')[-1]
@@ -1259,10 +1314,8 @@ class ABCExporterUI(QtWidgets.QWidget):
                     'user': current_user,
                     'date': current_date,
                     'time': current_time,
-                    'shot': 'SHOT001',  # 默认镜头编号，可根据需要修改
                     'start': start,
                     'end': end,
-                    'assetType': 'character'  # 默认资产类型，可根据需要修改
                 }
                 
                 # 格式化文件名
@@ -1308,10 +1361,8 @@ class ABCExporterUI(QtWidgets.QWidget):
                 cmd += f' -root {obj}'
                 if export_options:
                     cmd += " " + " ".join(export_options)
-                cmd += f' -file \\"{file_name}\\" "'
-    
-                # 执行导出
-                mel.eval(cmd)
+                # 单个文件仍由一个 AbcExport 作业完成，逐帧回调只反馈进度
+                self.run_export(cmd, file_name, start, end, i, total_count, progress_text)
                 print(f"成功导出: {file_name}")
                 success_count += 1
                 
@@ -1319,18 +1370,26 @@ class ABCExporterUI(QtWidgets.QWidget):
                 cmds.warning(f"导出失败 {obj}: {str(e)}")
                 import traceback
                 traceback.print_exc()
-        
-        # 关闭进度对话框
-        progress_dialog.close()
-        
+            finally:
+                processed_count = i + 1
+                self.set_progress(processed_count, total_count,
+                                  f"已处理 {processed_count}/{total_count} 个物体")
+
+        self.exporting = False
+
         # 显示汇总结果
-        if progress_dialog.cancelled:
+        if self.export_cancelled and processed_count < total_count:
             msg = f"导出已取消！已完成 {success_count}/{total_count} 个物体"
         else:
             msg = f"导出完成！成功 {success_count}/{total_count} 个物体"
             
-        if success_count < total_count:
+        if success_count < processed_count:
             msg += " (详见脚本编辑器错误日志)"
+
+        # 百分比表示已处理工作量；失败数量由汇总文本单独说明
+        self.set_progress(processed_count, total_count, msg)
+        self._export_busy = False
+
         QtWidgets.QMessageBox.information(self, "导出结果", msg)
 
 
