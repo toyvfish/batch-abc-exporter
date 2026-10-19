@@ -3,8 +3,8 @@
 -------------------------------------------------------------
  插件名称: 批量ABC导出器
  作者: toyvfish
- 当前版本: v2.3
- 最后更新时间: 2026-10-15
+ 当前版本: v2.4
+ 最后更新时间: 2026-10-19
  适用软件: Autodesk Maya (PySide2 / PySide6)
  功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
            智能命名模板、自动版本号、同名防覆盖与设置记忆
@@ -57,7 +57,7 @@ def _get_header_candidate_paths():
     return paths
 
 
-def _read_header_version(default="v2.3"):
+def _read_header_version(default="v2.4"):
     """从文件头信息中读取“当前版本”字段，读取失败时回退 default
 
     优先解析模块 docstring(__doc__): 无论 import、脚本编辑器粘贴执行
@@ -257,6 +257,7 @@ class HelpDialog(QtWidgets.QDialog):
 <p>• 镜头版本：场景_物体_版本_用户</p>
 <p>• 日期版本：物体_日期_版本</p>
 <p>• 时间范围：物体_起始帧-结束帧</p>
+<p>• 自定义格式输入框右侧的 Maya 图标按钮可一键清空格式内容</p>
 <p>------------------------------------------------------------------
 
 <p><b>可用变量：</b>（在主界面命名规则区域点击变量按钮，可直接插入到自定义格式输入框）</p>
@@ -310,6 +311,17 @@ class HelpDialog(QtWidgets.QDialog):
         # 更新日志内容
         changelog_content = """
 <h2>更新日志</h2>
+
+<h3>v2.4</h3>
+
+<p style="margin-top: 12px">• <b>[新增] 自定义格式一键清空</b></p>
+<p style="margin-left: 14px">点击即可清空格式内容并同步模板为“自定义”。</p>
+
+<p style="margin-top: 12px">• <b>[移除] 去除窗口最大化按钮</b></p>
+<p style="margin-left: 14px">插件独立窗口标题栏只保留最小化与关闭按钮，不再显示最大化按钮。</p>
+
+<p style="margin-top: 12px">• <b>[优化] 进度百分比只显示整数</b></p>
+<p style="margin-left: 14px">底部进度条百分比文字去除小数，只显示整数百分比。</p>
 
 <h3>v2.3</h3>
 
@@ -381,7 +393,10 @@ class ABCExporterUI(QtWidgets.QWidget):
         super(ABCExporterUI, self).__init__(parent)
         self.setWindowTitle("{0} {1}".format(PLUGIN_NAME, _read_header_version()))
         self.setMinimumWidth(280)
-        self.setWindowFlags(QtCore.Qt.Window)  # 设置为独立窗口
+        # 独立窗口:标题栏只保留最小化与关闭按钮,不显示最大化按钮
+        self.setWindowFlags(QtCore.Qt.Window
+                            | QtCore.Qt.WindowMinimizeButtonHint
+                            | QtCore.Qt.WindowCloseButtonHint)
         self.export_path = ""  # 存储导出路径
         self.exporting = False         # 是否正在导出(ESC 中断仅在此时生效)
         self.export_cancelled = False  # ESC 触发的取消标志
@@ -489,10 +504,41 @@ class ABCExporterUI(QtWidgets.QWidget):
         pattern_layout.addWidget(QtWidgets.QLabel("自定义格式:"))
         main_layout.addLayout(pattern_layout)
 
-        # 输入名称
+        # 输入名称 + 清空按钮:按钮紧贴输入框右侧,输入框让出按钮宽度,
+        # 整行宽度保持不变,避免为此增加插件窗口宽度
         name_layout = QtWidgets.QHBoxLayout()
+        name_layout.setSpacing(2)   # 输入框与清空图标贴得更近
         self.name_pattern = QtWidgets.QLineEdit("{name}")
-        name_layout.addWidget(self.name_pattern)
+        name_layout.addWidget(self.name_pattern, 1)   # 占据按钮以外的剩余宽度
+        self.clear_pattern_btn = QtWidgets.QPushButton()
+        # 不再取 Maya 内置 closeTabButton.png 位图:源图分辨率低,裁剪
+        # 放大后(高 DPI 屏放大倍数更高)图标发虚;改为矢量绘制"×",
+        # 按设备像素比以物理像素抗锯齿光栅化,任意缩放比例下都清晰锐利
+        clear_icon = self.make_vector_close_icon()
+        if clear_icon.isNull():
+            self.clear_pattern_btn.setText("×")
+        else:
+            self.clear_pattern_btn.setIcon(clear_icon)
+        self.clear_pattern_btn.setIconSize(QtCore.QSize(16, 16))
+        self.clear_pattern_btn.setFixedSize(20, 20)   # 只占行内宽度,不撑宽窗口
+        self.clear_pattern_btn.setFlat(True)
+        self.clear_pattern_btn.setToolTip("清空自定义格式输入框")
+        self.clear_pattern_btn.setStyleSheet("""
+            QPushButton {
+                border: none;
+                background: transparent;
+                padding: 0;
+            }
+            QPushButton:hover {
+                background-color: rgba(255, 255, 255, 30);
+                border-radius: 4px;
+            }
+            QPushButton:pressed {
+                background-color: rgba(255, 255, 255, 50);
+            }
+        """)
+        self.clear_pattern_btn.clicked.connect(self.clear_name_pattern)
+        name_layout.addWidget(self.clear_pattern_btn)
         main_layout.addLayout(name_layout)
         
         # 变量提示:每个变量改为可点击按钮,点击即插入到自定义格式输入框
@@ -732,6 +778,55 @@ class ABCExporterUI(QtWidgets.QWidget):
         help_dialog = HelpDialog(self)
         help_dialog.exec_()
 
+    def make_vector_close_icon(self, size=14):
+        """矢量绘制"×"清空图标,任意 DPI 下都清晰锐利
+
+        之前用 Maya 内置 closeTabButton.png 位图再裁剪放大,源图分辨率
+        不足,高分屏上发虚。这里直接用 QPainter 抗锯齿绘制 X 形:按
+        devicePixelRatio 以物理像素光栅化,全程不做位图缩放;线宽与
+        端点边距按逻辑尺寸自适应,颜色跟随主题文字色,深浅主题都清晰
+        """
+        try:
+            try:
+                dpr = float(self.devicePixelRatioF())
+            except Exception:
+                dpr = 1.0
+            if dpr <= 0:
+                dpr = 1.0
+            size = max(1, int(size))
+            phys = max(1, int(round(size * dpr)))   # 物理像素画布尺寸
+
+            image = QtGui.QImage(phys, phys,
+                                 QtGui.QImage.Format_ARGB32_Premultiplied)
+            image.setDevicePixelRatio(dpr)   # 标记后统一用逻辑坐标绘制
+            image.fill(QtCore.Qt.transparent)
+
+            painter = QtGui.QPainter(image)
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            color = self.palette().color(QtGui.QPalette.WindowText)
+            if not color.isValid():
+                color = QtGui.QColor(255, 255, 255)
+            line_w = max(1.0, float(round(size / 8.0)))   # 逻辑线宽,随图标缩放
+            pen = QtGui.QPen(color, line_w)
+            pen.setCapStyle(QtCore.Qt.RoundCap)
+            painter.setPen(pen)
+            inset = line_w / 2.0 + 1.0   # 端点留边,避免圆头被画布裁掉
+            painter.drawLine(QtCore.QLineF(inset, inset,
+                                           size - inset, size - inset))
+            painter.drawLine(QtCore.QLineF(size - inset, inset,
+                                           inset, size - inset))
+            painter.end()
+
+            pixmap = QtGui.QPixmap.fromImage(image)
+            try:
+                pixmap.setDevicePixelRatio(dpr)
+            except Exception:
+                pass
+            return QtGui.QIcon(pixmap)
+        except Exception:
+            # 极端情况(如旧版 Qt 缺少 DPR 接口)回退为空图标,上层用文字兜底
+            return QtGui.QIcon()
+
     def make_menu_indicator_icon(self, icon_name):
         """给图标右下角合成一个小三角,提示按钮带有右键菜单(仿 Maya 工具栏样式)
 
@@ -761,11 +856,90 @@ class ABCExporterUI(QtWidgets.QWidget):
         painter.end()
         return QtGui.QIcon(pix)
 
+    def make_themed_icon(self, icon_name, size=18):
+        """取 Maya 内置图标,裁掉透明边后放大居中,并按主题文字色着色
+
+        Maya 内置图标画布通常大于图形本身且带透明边距,直接使用会显得
+        又小又偏。这里先取非透明内容的包围盒,把图形缩放居中到目标画布,
+        再把颜色替换为当前主题文字色,深色/浅色主题下都清晰可见
+        """
+        try:
+            icon = get_maya_icon(icon_name)
+            if icon.isNull():
+                return QtGui.QIcon()
+            # 取内置图标可用的最大尺寸作为源图,避免先缩小再放大导致模糊
+            sizes = icon.availableSizes()
+            if sizes:
+                source_size = max(sizes, key=lambda s: s.width() * s.height())
+            else:
+                source_size = QtCore.QSize(size * 4, size * 4)
+            base = icon.pixmap(source_size)
+            if base.isNull():
+                return QtGui.QIcon()
+            image = base.toImage().convertToFormat(QtGui.QImage.Format_ARGB32)
+
+            # 1. 查找非透明内容的包围盒,裁掉 Maya 图标自带的透明边距
+            left, top = image.width(), image.height()
+            right = bottom = -1
+            for y in range(image.height()):
+                for x in range(image.width()):
+                    if image.pixelColor(x, y).alpha() > 0:
+                        left = min(left, x)
+                        top = min(top, y)
+                        right = max(right, x)
+                        bottom = max(bottom, y)
+            if right < left or bottom < top:
+                return QtGui.QIcon()
+
+            # 2. 按设备像素比缩放到正方形画布,并居中(四周留 1 逻辑像素)
+            try:
+                dpr = float(base.devicePixelRatio())
+            except Exception:
+                dpr = 1.0
+            if dpr <= 0:
+                dpr = 1.0
+            canvas = max(1, int(round(size * dpr)))
+            margin = max(1, int(round(dpr)))
+            avail = max(1, canvas - margin * 2)
+            cropped = image.copy(left, top, right - left + 1, bottom - top + 1)
+            scaled = cropped.scaled(avail, avail,
+                                    QtCore.Qt.KeepAspectRatio,
+                                    QtCore.Qt.SmoothTransformation)
+            canvas_image = QtGui.QImage(canvas, canvas,
+                                        QtGui.QImage.Format_ARGB32)
+            canvas_image.fill(QtCore.Qt.transparent)
+            painter = QtGui.QPainter(canvas_image)
+            painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
+            painter.drawImage((canvas - scaled.width()) // 2,
+                              (canvas - scaled.height()) // 2, scaled)
+            painter.end()
+
+            # 3. 按主题文字色着色(保留 alpha,确保深浅主题都清晰)
+            text_color = self.palette().color(QtGui.QPalette.WindowText)
+            for y in range(canvas_image.height()):
+                for x in range(canvas_image.width()):
+                    alpha = canvas_image.pixelColor(x, y).alpha()
+                    if alpha:
+                        canvas_image.setPixelColor(x, y, QtGui.QColor(
+                            text_color.red(), text_color.green(),
+                            text_color.blue(), alpha))
+
+            pixmap = QtGui.QPixmap.fromImage(canvas_image)
+            try:
+                pixmap.setDevicePixelRatio(dpr)
+            except Exception:
+                pass
+            return QtGui.QIcon(pixmap)
+        except Exception:
+            # 极端情况(如旧版 Qt 不支持逐像素 API)回退,交给上层用备用图标/文字
+            return QtGui.QIcon()
+
     def set_progress(self, current, total, text):
-        """按实际已处理工作量更新进度，显示精度为 0.1%。"""
+        """按实际已处理工作量更新进度,百分比文字只显示整数,不显示小数"""
         value = max(0, min(1000, int(current / total * 1000))) if total > 0 else 0
         self.progress_bar.setValue(value)
-        self.progress_label.setText(f"{value / 10:.1f}%  {text}")
+        percent = int(value / 10)   # 0~100 整数百分比:直接截断小数位
+        self.progress_label.setText(f"{percent}%  {text}")
         QtWidgets.QApplication.processEvents()
 
     def run_export(self, job, file_name, start, end, completed, total, text):
@@ -1025,7 +1199,20 @@ class ABCExporterUI(QtWidgets.QWidget):
         line_edit.setText(text[:pos] + prefix + var + text[pos:])
         line_edit.setCursorPosition(pos + len(prefix) + len(var))
         line_edit.setFocus()
-    
+
+    def clear_name_pattern(self):
+        """一键清空自定义格式输入框,并把预设模板同步切到“自定义”
+
+        下拉框不同步会继续显示旧预设名称,容易误以为格式仍是该预设;
+        只切下拉框、不触发 apply_template,避免再次改写输入框内容
+        """
+        self.name_pattern.clear()
+        if self.template_combo.currentIndex() != 6:   # 6 = 自定义
+            self.template_combo.blockSignals(True)
+            self.template_combo.setCurrentIndex(6)
+            self.template_combo.blockSignals(False)
+        self.name_pattern.setFocus()
+
     def update_frame_range(self):
         """根据范围模式更新帧范围控件状态"""
         mode = self.range_mode.currentText()
