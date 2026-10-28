@@ -11,3 +11,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# 本地归档与测试目录,不入库
+版本备份/
+tests/
