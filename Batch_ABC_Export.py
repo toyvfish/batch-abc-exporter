@@ -3,8 +3,8 @@
 -------------------------------------------------------------
  插件名称: 批量ABC导出器
  作者: toyvfish
- 当前版本: v2.4
- 最后更新时间: 2026-10-19
+ 当前版本: v2.5
+ 最后更新时间: 2026-10-29
  适用软件: Autodesk Maya (PySide2 / PySide6)
  功能简介: 批量 Alembic (ABC) 导出工具，支持单独/合并导出、
            智能命名模板、自动版本号、同名防覆盖与设置记忆
@@ -57,7 +57,7 @@ def _get_header_candidate_paths():
     return paths
 
 
-def _read_header_version(default="v2.4"):
+def _read_header_version(default="v2.5"):
     """从文件头信息中读取“当前版本”字段，读取失败时回退 default
 
     优先解析模块 docstring(__doc__): 无论 import、脚本编辑器粘贴执行
@@ -112,6 +112,18 @@ AVAILABLE_VARIABLES = [
     ("{end}", "结束帧"),
     ("##", "自动版本号"),
 ]
+
+# 预设模板对应的格式文本(索引与下拉框选项一一对应,6 为"自定义")
+# apply_template 与格式内容同步共用这一份,避免两处字典不一致
+TEMPLATE_PATTERNS = {
+    0: "{name}",
+    1: "{scene}_{name}_##",
+    2: "{scene}_{name}_cache",
+    3: "{scene}_{name}_##_{user}",
+    4: "{name}_{date}_##",
+    5: "{name}_{start}-{end}",
+    6: "",  # 自定义
+}
 
 # 默认设置存档文件名(存放在 Maya 用户脚本目录,与脚本放哪里无关)
 SETTINGS_FILENAME = "abc_exporter_settings.json"
@@ -236,6 +248,7 @@ class HelpDialog(QtWidgets.QDialog):
 <p>• <b>当前帧</b>：只导出当前时间轴位置的帧</p>
 <p>• <b>时间滑块</b>：导出时间滑块范围内的所有帧</p>
 <p>• <b>自定义</b>：手动设置起始和结束帧</p>
+<p>• <b>快捷调整</b>：范围模式后方的 - / + 按钮，点击即把起止帧向中间收缩或向两边各扩张 1 帧，并自动切换为自定义模式（当前帧模式下不可用）</p>
 <p>------------------------------------------------------------------
 
 <h3>2. 导出选项</h3>
@@ -311,6 +324,14 @@ class HelpDialog(QtWidgets.QDialog):
         # 更新日志内容
         changelog_content = """
 <h2>更新日志</h2>
+
+<h3>v2.5</h3>
+
+<p style="margin-top: 12px">• <b>[新增] 帧范围快捷收缩 / 扩张按钮</b></p>
+<p style="margin-left: 14px">范围模式下拉框后方新增 - / + 按钮：点击 - 把起止帧向中间各收 1 帧，点击 + 向两边各扩 1 帧，并自动切换为自定义模式；「当前帧」模式下按钮置灰不可用。</p>
+
+<p style="margin-top: 12px">• <b>[修复] 修改格式后预设模板未同步</b></p>
+<p style="margin-left: 14px">在自定义格式输入框中输入或修改内容后，预设模板下拉框会自动切换为「自定义」，不再停留在原预设名称。</p>
 
 <h3>v2.4</h3>
 
@@ -422,7 +443,28 @@ class ABCExporterUI(QtWidgets.QWidget):
         # 设置默认为时间滑块
         self.range_mode.setCurrentText("时间滑块")
         frame_layout.addWidget(self.range_mode, 0, 1)  # 跨两列
-    
+
+        # 模式下拉框后方成对的 -/+ 按钮:- 向中间收缩帧范围,+ 向两边扩张,
+        # 两键之间只留极小间距贴合成一组;压掉主题样式的内边距,
+        # 避免两个小按钮被主题默认 padding 撑开,看起来相隔很远
+        shift_layout = QtWidgets.QHBoxLayout()
+        shift_layout.setSpacing(2)
+        shift_qss = "QPushButton { padding: 0px; margin: 0px; }"
+        self.frame_minus_btn = QtWidgets.QPushButton("-")
+        self.frame_minus_btn.setFixedSize(20, 20)
+        self.frame_minus_btn.setStyleSheet(shift_qss)
+        self.frame_minus_btn.setToolTip("帧范围向中间各收缩 1 帧")
+        self.frame_plus_btn = QtWidgets.QPushButton("+")
+        self.frame_plus_btn.setFixedSize(20, 20)
+        self.frame_plus_btn.setStyleSheet(shift_qss)
+        self.frame_plus_btn.setToolTip("帧范围向两边各扩张 1 帧")
+        shift_layout.addWidget(self.frame_minus_btn)
+        shift_layout.addWidget(self.frame_plus_btn)
+        # AlignLeft 让布局按内容收紧:该列宽度由下方的结束帧输入框撑开,
+        # 若不指定对齐,多余宽度会被 QBoxLayout 平均塞进两键间隙,
+        # 导致 - 和 + 看起来相隔很远
+        frame_layout.addLayout(shift_layout, 0, 2, QtCore.Qt.AlignLeft)
+
         # 第二行：帧数输入
         frame_layout.addWidget(QtWidgets.QLabel("起始/结束"), 1, 0)
         self.start_frame = QtWidgets.QSpinBox()
@@ -439,9 +481,15 @@ class ABCExporterUI(QtWidgets.QWidget):
         # 根据默认模式设置帧输入框状态
         self.start_frame.setEnabled(False)
         self.end_frame.setEnabled(False)
-        
+        # 默认时间滑块模式,加减按钮可用;切到当前帧模式时
+        # 由 update_frame_range 统一置灰
+        self.frame_minus_btn.setEnabled(True)
+        self.frame_plus_btn.setEnabled(True)
+
         # 连接信号
         self.range_mode.currentIndexChanged.connect(self.update_frame_range)
+        self.frame_minus_btn.clicked.connect(lambda: self.shift_frame_range(-1))
+        self.frame_plus_btn.clicked.connect(lambda: self.shift_frame_range(1))
                 
         frame_group.setLayout(frame_layout)
 
@@ -511,9 +559,10 @@ class ABCExporterUI(QtWidgets.QWidget):
         self.name_pattern = QtWidgets.QLineEdit("{name}")
         name_layout.addWidget(self.name_pattern, 1)   # 占据按钮以外的剩余宽度
         self.clear_pattern_btn = QtWidgets.QPushButton()
-        # 不再取 Maya 内置 closeTabButton.png 位图:源图分辨率低,裁剪
-        # 放大后(高 DPI 屏放大倍数更高)图标发虚;改为矢量绘制"×",
-        # 按设备像素比以物理像素抗锯齿光栅化,任意缩放比例下都清晰锐利
+        # 矢量绘制"×"清空图标:Maya 内置 Delete / deleteSmall 等资源
+        # 在部分版本 QIcon 非空但渲染为空白(资源注册了但内容缺失),
+        # 不可靠;自绘按设备像素比以物理像素抗锯齿光栅化,任意缩放
+        # 比例与深浅主题下都清晰,不依赖 Maya 资源
         clear_icon = self.make_vector_close_icon()
         if clear_icon.isNull():
             self.clear_pattern_btn.setText("×")
@@ -538,6 +587,9 @@ class ABCExporterUI(QtWidgets.QWidget):
             }
         """)
         self.clear_pattern_btn.clicked.connect(self.clear_name_pattern)
+        # 格式内容被手动改动(输入/粘贴/插入变量)后若不再匹配所选预设,
+        # 自动把预设模板下拉框同步切换为"自定义"
+        self.name_pattern.textChanged.connect(self.sync_template_to_custom)
         name_layout.addWidget(self.clear_pattern_btn)
         main_layout.addLayout(name_layout)
         
@@ -781,10 +833,10 @@ class ABCExporterUI(QtWidgets.QWidget):
     def make_vector_close_icon(self, size=14):
         """矢量绘制"×"清空图标,任意 DPI 下都清晰锐利
 
-        之前用 Maya 内置 closeTabButton.png 位图再裁剪放大,源图分辨率
-        不足,高分屏上发虚。这里直接用 QPainter 抗锯齿绘制 X 形:按
-        devicePixelRatio 以物理像素光栅化,全程不做位图缩放;线宽与
-        端点边距按逻辑尺寸自适应,颜色跟随主题文字色,深浅主题都清晰
+        直接用 QPainter 抗锯齿绘制 X 形:按 devicePixelRatio 以物理像素
+        光栅化,全程不做位图缩放;线宽与端点边距按逻辑尺寸自适应,
+        颜色跟随主题文字色,深浅主题都清晰。不依赖 Maya 图标资源,
+        任何 Maya 版本下显示一致
         """
         try:
             try:
@@ -1173,16 +1225,7 @@ class ABCExporterUI(QtWidgets.QWidget):
         return self.sanitize_name(processed)
 
     def apply_template(self):
-        templates = {
-            0: "{name}",
-            1: "{scene}_{name}_##",
-            2: "{scene}_{name}_cache",
-            3: "{scene}_{name}_##_{user}",
-            4: "{name}_{date}_##", 
-            5: "{name}_{start}-{end}",
-            6: "",  # 自定义
-        }
-        self.name_pattern.setText(templates.get(self.template_combo.currentIndex(), ""))
+        self.name_pattern.setText(TEMPLATE_PATTERNS.get(self.template_combo.currentIndex(), ""))
     
     def insert_variable(self, var):
         """把变量插入到自定义格式输入框的当前光标位置
@@ -1200,22 +1243,46 @@ class ABCExporterUI(QtWidgets.QWidget):
         line_edit.setCursorPosition(pos + len(prefix) + len(var))
         line_edit.setFocus()
 
-    def clear_name_pattern(self):
-        """一键清空自定义格式输入框,并把预设模板同步切到“自定义”
+    def sync_template_to_custom(self):
+        """格式内容与所选预设不一致时,把预设模板下拉框同步切到“自定义”
 
-        下拉框不同步会继续显示旧预设名称,容易误以为格式仍是该预设;
-        只切下拉框、不触发 apply_template,避免再次改写输入框内容
+        手动输入、粘贴或插入变量都会使格式偏离预设,下拉框若仍停留在
+        旧预设名称,会误以为格式还是该预设;内容与预设模板一致时不切换,
+        避免选中预设填充内容时被误判为自定义
         """
-        self.name_pattern.clear()
-        if self.template_combo.currentIndex() != 6:   # 6 = 自定义
+        index = self.template_combo.currentIndex()
+        if index == 6:   # 6 = 自定义,无需同步
+            return
+        if self.name_pattern.text() != TEMPLATE_PATTERNS.get(index, ""):
+            # 只切下拉框、不触发 apply_template,避免再次改写输入框内容
             self.template_combo.blockSignals(True)
             self.template_combo.setCurrentIndex(6)
             self.template_combo.blockSignals(False)
+
+    def clear_name_pattern(self):
+        """一键清空自定义格式输入框(预设模板经 textChanged 自动同步为“自定义”)"""
+        self.name_pattern.clear()
         self.name_pattern.setFocus()
+
+    def shift_frame_range(self, delta):
+        """扩张 / 收缩帧范围,起止帧各向外或向内移动 delta 帧
+
+        delta>0 向两边扩张(1001-1010 → 1000-1011),
+        delta<0 向中间收缩(1001-1010 → 1002-1009);
+        时间滑块 / 当前帧模式下导出始终读取场景范围,只改数值不会生效;
+        点击按钮即视为手动微调,范围模式自动切换为自定义
+        """
+        if self.range_mode.currentText() != "自定义":
+            self.range_mode.setCurrentText("自定义")
+        self.start_frame.setValue(self.start_frame.value() - delta)
+        self.end_frame.setValue(self.end_frame.value() + delta)
 
     def update_frame_range(self):
         """根据范围模式更新帧范围控件状态"""
         mode = self.range_mode.currentText()
+        # 当前帧模式下起止帧恒等于当前帧,加减无意义,按钮置灰
+        self.frame_minus_btn.setEnabled(mode != "当前帧")
+        self.frame_plus_btn.setEnabled(mode != "当前帧")
         if mode == "自定义":
             self.start_frame.setEnabled(True)
             self.end_frame.setEnabled(True)
